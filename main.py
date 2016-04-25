@@ -8,6 +8,7 @@ import cloudpickle
 import base64
 import socket
 import traceback
+import os
 
 import redis
 
@@ -17,6 +18,9 @@ class this():
 	pass
 
 class HiveMindBase():
+	
+	master_channel = "_hivemind"
+	
 	#get a reply
 	def reply(self, cmdid, *args):
 		#reply using the command and each input following it
@@ -65,11 +69,11 @@ class HiveMind(HiveMindBase):
 		
 		self.redis = redis.ConnectionPool(host="127.0.0.1", port=6379)
 		if hostname is None:
-			hostname = "{}:{}".format(socket.gethostname(), random.randint(1, 10000))
+			hostname = "{}:{}".format(socket.gethostname(), os.getpid())
 			
 		self.hostname = hostname
 		self.pubsub['self'] = redis.Redis(connection_pool=self.redis_pool).pubsub()
-		self.pubsub['self'].subscribe(["hivemind", hostname])
+		self.pubsub['self'].subscribe([self.master_channel, hostname])
 		self.redis = redis.Redis(connection_pool=self.redis_pool)
 		
 		self.join_cluster()
@@ -86,6 +90,8 @@ class HiveMind(HiveMindBase):
 					self.run_obj(data[0], data[3]["name"], data[3]["args"])
 				elif data[2] == "spawn":
 					self.spawn(None, data[3]["mod"], data[3]["func"], data[3]["args"])
+				else:
+					print item
 			except Exception, e:
 				
 				#print str(e)
@@ -106,16 +112,19 @@ class HiveMind(HiveMindBase):
 	#      this way we can decrypt it to make sure its trusted
 	def load_obj(self, name, data):
 		global this
+		
 		try:
-			setattr(this, name, cloudpickle.loads(base64.b64decode(data))) #decode the data and store it
-			print this
-		finally:
-			pass
-			#self.send((cmdid, True)) #send a reply we did as was asked
+			self.delattr(data)
+			try:
+				self.setattr(name, data)
+				#setattr(this, name, cloudpickle.loads(base64.b64decode(data))) #decode the data and store it
+				print this
+			finally:
+				pass
 			
 	def send_obj(self, name, func):
 		data = cloudpickle.dumps(func)
-		self.send("hivemind", "load_obj", {"name": name, "obj": base64.b64encode(data)})
+		self.send(self.master_channel, "load_obj", {"name": name, "obj": base64.b64encode(data)})
 		
 		
 	#execute the data you wish to load
@@ -133,17 +142,35 @@ class HiveMind(HiveMindBase):
 		else:
 			self.send(channel, "spawn", {"mod":mod, "func":func, "args":args, "from": self.hostname})
 
+	#set the object
+	def setattr(self, name, func):
+		global this
+		self.redis.hset("_hivemind:this", name, func)
+		setattr(this, name, cloudpickle.loads(base64.b64decode(func)))
+	
+	#del the object
+	def delattr():
+		global this
+		delattr(this, name)
+		self.redis.hdel("_hivemind:this", name)
+	
+	#get the object
+	def getattr():
+		global this
+		
+		pass
+
 	
 	# add my self to the nodes in the cluster
 	# let all memebers know i am here
 	def join_cluster(self):
 		self.redis.hset("hivemind_nodes", self.hostname, time.time())
-		self.redis.publish("hivemind", json.dumps({"action": "join_cluster", "hostname": self.hostname}))
+		self.redis.publish(self.master_channel, json.dumps({"action": "join_cluster", "hostname": self.hostname}))
 		
 class HiveMindBee(HiveMindBase):
 	
 	inbox = None
-	inbox_name = None
+	inbox_name = ""
 	redis_pool = None
 	redis = None
 	hostname = None
@@ -174,45 +201,14 @@ class HiveMindBee(HiveMindBase):
 		args1.insert(0, cmdid)
 		print cmdid
 		print args1
-		self.redis.publish(channel, json.dumps(args1))
+		print self.redis
+		print json.dumps(args1)
+		print self.redis.publish(channel, json.dumps(args1))
+		print self.redis.publish(channel, time.time())
 		
-	def __del__ ():
+	def __del__ (self):
 		pass
-		
 
-	
-		
-class HiveMindNode(HiveMindBase):
-	
-	conn = None
-	hostname = None
-	tags = None
-	
-	def __init__(self, name, tags, conn, **kwargs):
-		self.conn = conn
-		self.hostname = name
-		self.tags = tags
-		
-	#send the object over the wire
-	def send_obj(self, name, func):
-		data = cloudpickle.dumps(func)
-		self.send("load_obj", name, base64.b64encode(data))
-	
-	#run the object on the other end
-	def run_obj(self, obj_name, args=[]):
-		self.send("run_obj", {"name": obj_name, "args": args})
-	
-	
-	#self start a thread on the other end
-	#def spawn()
-	
-
-
-
-		
-		
-		
-		
 		
 if __name__ == "__main__":
 	
